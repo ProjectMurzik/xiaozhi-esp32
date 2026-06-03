@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     container:
-      image: espressif/idf:v5.5
+      image: espressif/idf:v5.5.3  # Существующая версия
       options: --user root
     
     steps:
@@ -20,6 +20,10 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+      
+      - name: Update git submodules
+        run: |
+          git submodule update --init --recursive
       
       - name: Build firmware
         run: |
@@ -47,16 +51,16 @@ jobs:
           echo "### Build Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- **Target:** ESP32-P4" >> $GITHUB_STEP_SUMMARY
           echo "- **Board:** Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C" >> $GITHUB_STEP_SUMMARY
-          echo "- **ESP-IDF:** v5.5" >> $GITHUB_STEP_SUMMARY
+          echo "- **ESP-IDF:** v5.5.3" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Time:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
           echo "- **Git Commit:** $(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -d "build" ] && [ -n "$(ls -A build/*.bin 2>/dev/null)" ]; then
+          if [ -d "build" ]; then
             echo "### Firmware Files" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            ls -lh build/*.bin 2>/dev/null | awk '{print "- " $$9 ": " $$5}' >> $GITHUB_STEP_SUMMARY
+            ls -lh build/*.bin 2>/dev/null | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY || echo "No .bin files found" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           else
-            echo "### ⚠️ No firmware files found" >> $GITHUB_STEP_SUMMARY
+            echo "### ⚠️ Build directory not found" >> $GITHUB_STEP_SUMMARY
           fi
