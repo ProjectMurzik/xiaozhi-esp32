@@ -33,28 +33,29 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 0
       
-      - name: Install Python and pip
+      - name: Setup Python virtual environment
         run: |
           apt-get update
-          apt-get install -y python3 python3-pip
-          ln -s /usr/bin/python3 /usr/bin/python || true
-          pip3 install --upgrade pip
+          apt-get install -y python3-full python3-venv python3-pip
+          python3 -m venv /opt/venv
+          echo "/opt/venv/bin" >> $GITHUB_PATH
+          /opt/venv/bin/pip install --upgrade pip setuptools wheel
       
       - name: Cache ESP-IDF tools
         uses: actions/cache@v4
         with:
           path: |
             ~/.espressif
-            ~/.cache/pip
+            /opt/venv
           key: ${{ runner.os }}-espidf-${{ hashFiles('**/idf_component.yml') }}
           restore-keys: |
             ${{ runner.os }}-espidf-
       
       - name: Install Python dependencies
         run: |
-          python3 -m pip install --upgrade pip
+          /opt/venv/bin/pip install --upgrade pip
           if [ -f requirements.txt ]; then
-            python3 -m pip install -r requirements.txt
+            /opt/venv/bin/pip install -r requirements.txt
           fi
       
       - name: Set target to ESP32-P4
@@ -112,12 +113,12 @@ jobs:
           cd build
           # Проверяем наличие скрипта ota_create.py
           if [ -f ../scripts/ota/ota_create.py ]; then
-            python3 ../scripts/ota/ota_create.py --input xiaozhi.bin --output ../ota_package/xiaozhi-ota.bin || true
+            /opt/venv/bin/python ../scripts/ota/ota_create.py --input xiaozhi.bin --output ../ota_package/xiaozhi-ota.bin 2>/dev/null || true
           fi
           
           # Альтернативный способ создания OTA
           if [ ! -f ../ota_package/xiaozhi-ota.bin ]; then
-            python3 -m esptool --chip esp32p4 merge_bin -o ../ota_package/xiaozhi-ota.bin --flash_mode dio --flash_size 16MB 0x10000 xiaozhi.bin 2>/dev/null || true
+            /opt/venv/bin/python -m esptool --chip esp32p4 merge_bin -o ../ota_package/xiaozhi-ota.bin --flash_mode dio --flash_size 16MB 0x10000 xiaozhi.bin 2>/dev/null || true
             cp xiaozhi.bin ../ota_package/xiaozhi-ota.bin 2>/dev/null || true
           fi
           cd ..
@@ -154,6 +155,12 @@ jobs:
           echo "### Firmware Sizes" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ls -lh build/*.bin 2>/dev/null | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY || echo "No .bin files found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          # Использование памяти
+          echo "### Memory Usage" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          idf.py size 2>/dev/null || echo "Size info not available" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   # Опционально: создание релиза
