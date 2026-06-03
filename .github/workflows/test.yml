@@ -4,26 +4,19 @@ on:
   push:
     branches: [ "main", "v2", "develop" ]
     paths:
+      - 'main/boards/waveshare/esp32-p4-wifi6-touch-lcd/**'
       - 'main/**'
       - 'components/**'
-      - 'boards/**'
-      - 'sdkconfig.defaults*'
   pull_request:
     branches: [ "main", "v2" ]
   workflow_dispatch:
-    inputs:
-      clean_build:
-        description: 'Full clean build'
-        required: false
-        default: 'false'
-        type: boolean
 
 jobs:
   build:
     name: Build Firmware
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:v5.5.2  # Изменено с v5.4 на v5.5.2
+      image: espressif/idf:release-v5.5
       options: --user root
     
     steps:
@@ -33,179 +26,42 @@ jobs:
           submodules: 'recursive'
           fetch-depth: 0
       
-      - name: Setup Python virtual environment
-        run: |
-          apt-get update
-          apt-get install -y python3-full python3-venv python3-pip
-          python3 -m venv /opt/venv
-          echo "/opt/venv/bin" >> $GITHUB_PATH
-          /opt/venv/bin/pip install --upgrade pip setuptools wheel
-      
-      - name: Cache ESP-IDF tools
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.espressif
-            /opt/venv
-          key: ${{ runner.os }}-espidf-${{ hashFiles('**/idf_component.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-espidf-
-      
       - name: Install Python dependencies
         run: |
-          /opt/venv/bin/pip install --upgrade pip
+          apt-get update
+          apt-get install -y python3-pip
+          pip3 install --upgrade pip
           if [ -f requirements.txt ]; then
-            /opt/venv/bin/pip install -r requirements.txt
+            pip3 install -r requirements.txt
           fi
       
-      - name: Set target to ESP32-P4
+      - name: Set target and configure for Waveshare P4
         run: |
           . $IDF_PATH/export.sh
           idf.py set-target esp32p4
-      
-      - name: Configure build with board settings
-        run: |
-          . $IDF_PATH/export.sh
-          # Объединяем все конфигурационные файлы
-          if [ -f "sdkconfig.defaults.esp32p4" ]; then
-            CONFIG_FILES="sdkconfig.defaults;sdkconfig.defaults.esp32p4;main/boards/waveshare/esp32-p4-wifi6-touch-lcd/sdkconfig.board"
-          else
-            CONFIG_FILES="sdkconfig.defaults;main/boards/waveshare/esp32-p4-wifi6-touch-lcd/sdkconfig.board"
-          fi
           
-          echo "Using config files: $CONFIG_FILES"
-          idf.py -D SDKCONFIG_DEFAULTS="$CONFIG_FILES" build
-      
-      - name: Clean build (if requested)
-        if: github.event.inputs.clean_build == 'true'
+          # Устанавливаем конфигурацию для платы Waveshare 3.4C через menuconfig
+          echo "Configuring for Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C"
+          idf.py menuconfig
+          
+      - name: Build firmware
         run: |
           . $IDF_PATH/export.sh
-          idf.py fullclean
           idf.py build
-      
-      - name: List build artifacts
-        run: |
-          echo "Build directory contents:"
-          ls -la build/
-          echo ""
-          echo "Firmware files:"
-          find build/ -name "*.bin" -type f
       
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xiaozhi-waveshare-p4-firmware
+          name: xiaozhi-waveshare-p4-3.4c
           retention-days: 30
-          compression-level: 9
           path: |
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
             build/xiaozhi.bin
             build/flash_args
-            build/flash_project_args
       
-      - name: Create OTA update package
+      - name: Generate build info
         run: |
-          . $IDF_PATH/export.sh
-          mkdir -p ota_package
-          
-          # Создаем OTA образ
-          cd build
-          # Проверяем наличие скрипта ota_create.py
-          if [ -f ../scripts/ota/ota_create.py ]; then
-            /opt/venv/bin/python ../scripts/ota/ota_create.py --input xiaozhi.bin --output ../ota_package/xiaozhi-ota.bin 2>/dev/null || true
-          fi
-          
-          # Альтернативный способ создания OTA
-          if [ ! -f ../ota_package/xiaozhi-ota.bin ]; then
-            /opt/venv/bin/python -m esptool --chip esp32p4 merge_bin -o ../ota_package/xiaozhi-ota.bin --flash_mode dio --flash_size 16MB 0x10000 xiaozhi.bin 2>/dev/null || true
-            cp xiaozhi.bin ../ota_package/xiaozhi-ota.bin 2>/dev/null || true
-          fi
-          cd ..
-          
-          # Создаем информацию о сборке
-          echo "Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > ota_package/build_info.txt
-          echo "Git Commit: $(git rev-parse --short HEAD)" >> ota_package/build_info.txt
-          echo "Git Branch: ${GITHUB_REF_NAME}" >> ota_package/build_info.txt
-          echo "Target Board: Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C" >> ota_package/build_info.txt
-      
-      - name: Upload OTA package
-        uses: actions/upload-artifact@v4
-        with:
-          name: xiaozhi-waveshare-p4-ota
-          retention-days: 30
-          path: |
-            ota_package/
-      
-      - name: Generate build report
-        if: always()
-        run: |
-          . $IDF_PATH/export.sh
-          echo "## Build Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Build Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "- **Target:** ESP32-P4" >> $GITHUB_STEP_SUMMARY
-          echo "- **Board:** Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C" >> $GITHUB_STEP_SUMMARY
-          echo "- **ESP-IDF:** v5.5.2" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Time:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "- **Git Commit:** $(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Размеры файлов
-          echo "### Firmware Sizes" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ls -lh build/*.bin 2>/dev/null | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY || echo "No .bin files found" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          
-          # Использование памяти
-          echo "### Memory Usage" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          idf.py size 2>/dev/null || echo "Size info not available" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-  # Опционально: создание релиза
-  create-release:
-    name: Create Release
-    needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
-    steps:
-      - name: Download firmware artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: xiaozhi-waveshare-p4-firmware
-          path: firmware
-      
-      - name: Download OTA artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: xiaozhi-waveshare-p4-ota
-          path: ota
-      
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            firmware/*.bin
-            ota/*.bin
-            ota/*.txt
-          body: |
-            ## Waveshare ESP32-P4 Firmware Release
-            
-            ### Board: ESP32-P4-WIFI6-Touch-LCD-3.4C
-            
-            ### Included files:
-            - `bootloader.bin` - Bootloader
-            - `partition-table.bin` - Partition table
-            - `xiaozhi.bin` - Main firmware
-            - `xiaozhi-ota.bin` - OTA update package
-            
-            ### Flash instructions:
-            ```bash
-            esptool.py --chip esp32p4 --port /dev/ttyUSB0 \
-              write_flash 0x0 bootloader.bin \
-              0x8000 partition-table.bin \
-              0x10000 xiaozhi.bin
+          echo "Build completed for Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C"
+          echo "Commit: $(git rev-parse --short HEAD)"
+          echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
