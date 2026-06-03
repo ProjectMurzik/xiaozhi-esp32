@@ -1,54 +1,29 @@
-name: Build Xiaozhi for Waveshare ESP32-P4
+name: Build Waveshare ESP32-P4 3.4C
 
 on:
   push:
-    branches: [ "main", "v2", "develop" ]
-    paths:
-      - 'main/boards/waveshare/esp32-p4-wifi6-touch-lcd/**'
-      - 'main/**'
-      - 'components/**'
+    branches: [main, v2, develop]
   pull_request:
-    branches: [ "main", "v2" ]
+    branches: [main, v2]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Firmware
     runs-on: ubuntu-latest
-    container:
-      image: espressif/idf:release-v5.5
-      options: --user root
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
           fetch-depth: 0
-      
-      - name: Install Python dependencies
-        run: |
-          apt-get update
-          apt-get install -y python3-pip
-          pip3 install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip3 install -r requirements.txt
-          fi
-      
-      - name: Set target and configure for Waveshare P4
-        run: |
-          . $IDF_PATH/export.sh
-          idf.py set-target esp32p4
-          
-          # Устанавливаем конфигурацию для платы Waveshare 3.4C через menuconfig
-          echo "Configuring for Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C"
-          idf.py menuconfig
-          
-      - name: Build firmware
-        run: |
-          . $IDF_PATH/export.sh
-          idf.py build
-      
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32p4
+          command: idf.py build
+
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -59,9 +34,30 @@ jobs:
             build/partition_table/partition-table.bin
             build/xiaozhi.bin
             build/flash_args
-      
-      - name: Generate build info
+            build/flash_project_args
+
+      - name: Upload OTA package
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaozhi-waveshare-p4-ota
+          retention-days: 30
+          path: |
+            build/xiaozhi.bin
+
+      - name: Generate build report
+        if: always()
         run: |
-          echo "Build completed for Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C"
-          echo "Commit: $(git rev-parse --short HEAD)"
-          echo "Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "## Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** ESP32-P4" >> $GITHUB_STEP_SUMMARY
+          echo "- **Board:** Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C" >> $GITHUB_STEP_SUMMARY
+          echo "- **ESP-IDF:** v5.5" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Time:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git Commit:** $(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Firmware Files" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh build/*.bin 2>/dev/null | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY || echo "No .bin files found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
