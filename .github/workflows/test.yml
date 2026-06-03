@@ -1,63 +1,193 @@
-name: Build Xiaozhi for ESP32-P4
+name: Build Xiaozhi for Waveshare ESP32-P4
 
 on:
   push:
     branches: [ "main", "v2", "develop" ]
+    paths:
+      - 'main/**'
+      - 'components/**'
+      - 'boards/**'
+      - 'sdkconfig.defaults*'
   pull_request:
     branches: [ "main", "v2" ]
-  # Возможность запустить вручную из интерфейса GitHub
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Full clean build'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   build:
+    name: Build Firmware
     runs-on: ubuntu-latest
     container:
-      # Используем официальный контейнер с ESP-IDF v5.4 (как требуется в вашем проекте)
       image: espressif/idf:v5.4
+      options: --user root
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
-
-      - name: Build firmware for ESP32-P4
-        env:
-          # Указываем цель сборки - ESP32-P4
-          IDF_TARGET: esp32p4
+          fetch-depth: 0
+      
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ~/.cache/pip
+          key: ${{ runner.os }}-espidf-${{ hashFiles('**/idf_component.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-espidf-
+      
+      - name: Install Python dependencies
         run: |
-          # Устанавливаем необходимые Python зависимости
+          pip install --upgrade pip
           pip install -r requirements.txt
-          
-          # Настраиваем проект для esp32p4 (создаёт папку build)
+      
+      - name: Set target to ESP32-P4
+        run: |
+          . $IDF_PATH/export.sh
           idf.py set-target esp32p4
-          
-          # Применяем дефолтную конфигурацию для P4 из вашего проекта
-          # Если у вас есть отдельный конфиг для Waveshare, можно использовать его
-          if [ -f sdkconfig.defaults.esp32p4 ]; then
-            cp sdkconfig.defaults.esp32p4 sdkconfig
+      
+      - name: Configure build with board settings
+        run: |
+          . $IDF_PATH/export.sh
+          # Объединяем все конфигурационные файлы
+          # Порядок важен: базовый -> специфичный для P4 -> специфичный для платы
+          if [ -f "sdkconfig.defaults.esp32p4" ]; then
+            CONFIG_FILES="sdkconfig.defaults;sdkconfig.defaults.esp32p4;main/boards/waveshare/esp32-p4-wifi6-touch-lcd/sdkconfig.board"
+          else
+            CONFIG_FILES="sdkconfig.defaults;main/boards/waveshare/esp32-p4-wifi6-touch-lcd/sdkconfig.board"
           fi
           
-          # Сборка проекта
+          echo "Using config files: $CONFIG_FILES"
+          idf.py -D SDKCONFIG_DEFAULTS="$CONFIG_FILES" build
+      
+      - name: Clean build (if requested)
+        if: github.event.inputs.clean_build == 'true'
+        run: |
+          . $IDF_PATH/export.sh
+          idf.py fullclean
           idf.py build
-
+      
+      - name: List build artifacts
+        run: |
+          echo "Build directory contents:"
+          ls -la build/
+          echo ""
+          echo "Firmware files:"
+          find build/ -name "*.bin" -type f
+      
       - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xiaozhi-p4-firmware
+          name: xiaozhi-waveshare-p4-firmware
+          retention-days: 30
+          compression-level: 9
           path: |
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
             build/xiaozhi.bin
             build/flash_args
-      - name: Prepare OTA package
+            build/flash_project_args
+      
+      - name: Create OTA update package
         run: |
-          # Создаем файл для OTA обновления (опционально)
+          . $IDF_PATH/export.sh
+          mkdir -p ota_package
           cd build
-          python ../scripts/ota/ota_create.py --input xiaozhi.bin --output xiaozhi-ota.bin
+          # Создаем OTA образ
+          python ../scripts/ota/ota_create.py --input xiaozhi.bin --output ../ota_package/xiaozhi-ota.bin 2>/dev/null || \
+          python -m esptool --chip esp32p4 merge_bin -o ../ota_package/xiaozhi-ota.bin --flash_mode dio --flash_size 16MB 0x10000 xiaozhi.bin
           cd ..
           
+          # Создаем информацию о сборке
+          echo "Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > ota_package/build_info.txt
+          echo "Git Commit: $(git rev-parse --short HEAD)" >> ota_package/build_info.txt
+          echo "Git Branch: ${GITHUB_REF_NAME}" >> ota_package/build_info.txt
+          echo "Target Board: Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C" >> ota_package/build_info.txt
+      
       - name: Upload OTA package
         uses: actions/upload-artifact@v4
         with:
-          name: xiaozhi-p4-ota
-          path: build/xiaozhi-ota.bin
+          name: xiaozhi-waveshare-p4-ota
+          retention-days: 30
+          path: |
+            ota_package/
+      
+      - name: Generate build report
+        if: always()
+        run: |
+          . $IDF_PATH/export.sh
+          echo "## Build Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** ESP32-P4" >> $GITHUB_STEP_SUMMARY
+          echo "- **Board:** Waveshare ESP32-P4-WIFI6-Touch-LCD-3.4C" >> $GITHUB_STEP_SUMMARY
+          echo "- **ESP-IDF:** v5.4" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Time:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git Commit:** $(git rev-parse --short HEAD)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Размеры файлов
+          echo "### Firmware Sizes" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -lh build/*.bin 2>/dev/null | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY || echo "No .bin files found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          # Использование памяти
+          echo "### Memory Usage" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          idf.py size 2>/dev/null || echo "Size info not available" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # Опционально: создание релиза
+  create-release:
+    name: Create Release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaozhi-waveshare-p4-firmware
+          path: firmware
+      
+      - name: Download OTA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xiaozhi-waveshare-p4-ota
+          path: ota
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            firmware/*.bin
+            ota/*.bin
+            ota/*.txt
+          body: |
+            ## Waveshare ESP32-P4 Firmware Release
+            
+            ### Board: ESP32-P4-WIFI6-Touch-LCD-3.4C
+            
+            ### Included files:
+            - `bootloader.bin` - Bootloader
+            - `partition-table.bin` - Partition table
+            - `xiaozhi.bin` - Main firmware
+            - `xiaozhi-ota.bin` - OTA update package
+            
+            ### Flash instructions:
+            ```bash
+            esptool.py --chip esp32p4 --port /dev/ttyUSB0 \
+              write_flash 0x0 bootloader.bin \
+              0x8000 partition-table.bin \
+              0x10000 xiaozhi.bin
